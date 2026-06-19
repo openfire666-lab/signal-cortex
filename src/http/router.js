@@ -62,10 +62,23 @@ async function handle(req, res) {
 
 	if (path === "/health") return send(res, 200, { ok: true, ts: new Date().toISOString() });
 
-	if (!authed(req, url)) return send(res, 401, { error: "unauthorized — provide ?key= or Bearer token" });
+	// Permissive robots so Claude's web fetcher doesn't back off. Public market
+	// data isn't sensitive; we only protect live account data (see below).
+	if (path === "/robots.txt") {
+		return send(res, 200, "User-agent: *\nAllow: /\n", "text/plain; charset=utf-8");
+	}
+	if (path === "/") {
+		return send(res, 200,
+			"signal-cortex — fresh Bybit signal analysis\n" +
+			"GET /analyze?sym=AVAXUSDT&dir=long&entry=6.70-6.75&tp=7.05,7.35&sl=6.15&lev=2-5\n" +
+			"GET /analyze/AVAXUSDT?dir=long&entry=...&tp=...&sl=...\n" +
+			"GET /snapshot/AVAXUSDT\n" +
+			"Add &account=1 (+ ?key=TOKEN) for your live Bybit position.\n",
+			"text/plain; charset=utf-8");
+	}
 
 	try {
-		// GET /snapshot/AVAXUSDT
+		// GET /snapshot/AVAXUSDT — public market data, open read
 		const snap = /^\/snapshot\/([A-Za-z0-9]+)$/.exec(path);
 		if (snap && req.method === "GET") {
 			const m = await engine.fetchMarket(snap[1].toUpperCase());
@@ -74,24 +87,30 @@ async function handle(req, res) {
 				: send(res, 200, brief.snapshotBrief(m), "text/markdown; charset=utf-8");
 		}
 
-		// GET/POST /analyze
-		if (path === "/analyze") {
+		// GET/POST /analyze  or  /analyze/SYMBOL
+		const am = /^\/analyze(?:\/([A-Za-z0-9]+))?$/.exec(path);
+		if (am) {
 			const body = req.method === "POST" ? await readBody(req) : {};
 			const input = inputFrom(url, body);
+			if (am[1] && !input.symbol) input.symbol = am[1].toUpperCase();
 			if (!input.symbol) return send(res, 400, { error: "missing symbol (or POST {text:'<signal>'})" });
+			// Public analysis is open read. Live ACCOUNT data needs the token.
+			if (input.includeAccount && !authed(req, url)) {
+				return send(res, 401, { error: "live account data requires ?key=<AUTH_TOKEN>" });
+			}
 			const a = await engine.analyzeSignal(input);
 			return wantsJson(url, req)
 				? send(res, 200, a)
 				: send(res, 200, brief.analysisBrief(a), "text/markdown; charset=utf-8");
 		}
 
-		// POST /parse — just echo the parsed signal (debugging / preview)
+		// POST /parse — preview how a pasted signal parses
 		if (path === "/parse" && req.method === "POST") {
 			const body = await readBody(req);
 			return send(res, 200, engine.parseSignal(body.text || ""));
 		}
 
-		return send(res, 404, { error: "not found", routes: ["/health", "/snapshot/:symbol", "/analyze", "/parse"] });
+		return send(res, 404, { error: "not found", routes: ["/health", "/snapshot/:symbol", "/analyze", "/analyze/:symbol", "/parse"] });
 	} catch (e) {
 		return send(res, 500, { error: e.message });
 	}

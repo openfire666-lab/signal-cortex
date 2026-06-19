@@ -47,16 +47,18 @@ Market analysis needs **no Bybit key**. Account data needs a **read-only** key.
 | `POST /analyze` | analyze from JSON `{symbol,direction,entry,targets,stopLoss,leverage}` or `{text:"<pasted signal>"}` |
 | `POST /parse` | preview how a pasted signal parses |
 
-Auth: `Authorization: Bearer <AUTH_TOKEN>` **or** `?key=<AUTH_TOKEN>` (so a URL
-carries it). Default response is markdown; add `?format=json` for the raw object.
+**Auth:** public market/signal analysis is **open-read** (no token), so URLs
+carry no secret and Claude's web fetcher works freely. Only `&account=1` (your
+live Bybit position/balance) requires `?key=<AUTH_TOKEN>` or a Bearer header.
+Default response is markdown; add `?format=json` for the raw object.
 
 **Mobile-friendly GET** (paste this URL to Claude; it fetches fresh data):
 
 ```
-https://<host>/analyze?key=TOKEN&sym=AVAXUSDT&dir=long&entry=6.70-6.75&tp=7.05,7.35,7.75&sl=6.15&lev=2-5
+https://signals.rc-tron.com/analyze?sym=AVAXUSDT&dir=long&entry=6.70-6.75&tp=7.05,7.35,7.75&sl=6.15&lev=2-5
 ```
 
-Add `&account=1` to include your live Bybit position/balance for the symbol.
+Add `&account=1&key=<AUTH_TOKEN>` to include your live Bybit position/balance.
 
 **Paste a whole signal block:**
 
