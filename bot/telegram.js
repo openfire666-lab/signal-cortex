@@ -56,7 +56,10 @@ async function handle(msg) {
 	if (!parsed.symbol) return; // not a signal — stay quiet
 
 	try {
-		const a = await engine.analyzeSignal(parsed);
+		// Include live account/position only when the bot is locked to known
+		// chats, so an open (no-allowlist) bot never leaks the owner's position.
+		const includeAccount = telegram.allowedChats.length > 0;
+		const a = await engine.analyzeSignal({ ...parsed, includeAccount });
 		await reply(chatId, plain(brief.analysisBrief(a)));
 	} catch (e) {
 		await reply(chatId, `⚠ ${e.message}`);
