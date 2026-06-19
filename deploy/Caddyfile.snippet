@@ -1,9 +1,12 @@
-# Add to the box's /etc/caddy/Caddyfile (same file that already serves
-# api.beein.lv). Pick the subdomain you want on the RC-Tron domain and make
-# sure its DNS A-record points at the box's public IP.
+# Add to the box's /etc/caddy/Caddyfile (same file that serves api.beein.lv).
 #
-# signals.rc-tron.com — DNS A-record must point at the box's public IP first.
+# DNS first (Cloudflare dashboard for rc-tron.com):
+#   Type A · Name "signals" · Content 94.30.128.125 · Proxy status: DNS only (grey cloud)
+# Grey-cloud lets Caddy auto-issue a Let's Encrypt cert via TLS-ALPN-01 over the
+# already-forwarded :443. (No CF Origin cert needed — unlike the beein block.)
+#
 signals.rc-tron.com {
 	reverse_proxy 127.0.0.1:8090
 }
 # Then:  sudo systemctl reload caddy
+# Test:  curl https://signals.rc-tron.com/health
