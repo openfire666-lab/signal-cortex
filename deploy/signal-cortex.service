@@ -1,0 +1,20 @@
+# /etc/systemd/system/signal-cortex.service
+# Install on the box (192.168.0.2):
+#   sudo cp deploy/signal-cortex.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now signal-cortex
+[Unit]
+Description=Signal Cortex — fresh-data crypto signal analyzer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kaspars
+WorkingDirectory=/home/kaspars/signal-cortex
+EnvironmentFile=/home/kaspars/signal-cortex/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

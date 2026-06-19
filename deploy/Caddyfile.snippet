@@ -1,0 +1,9 @@
+# Add to the box's /etc/caddy/Caddyfile (same file that already serves
+# api.beein.lv). Pick the subdomain you want on the RC-Tron domain and make
+# sure its DNS A-record points at the box's public IP.
+#
+# signals.rc-tron.com — DNS A-record must point at the box's public IP first.
+signals.rc-tron.com {
+	reverse_proxy 127.0.0.1:8090
+}
+# Then:  sudo systemctl reload caddy

@@ -1,0 +1,15 @@
+{
+	"name": "signal-cortex",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Fresh-data crypto signal analyzer (Bybit v5) — HTTP + MCP surfaces for Claude",
+	"main": "src/index.js",
+	"scripts": {
+		"start": "node src/index.js",
+		"smoke": "node test/smoke.js",
+		"mcp": "node mcp/server.js"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}
