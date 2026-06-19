@@ -1,12 +1,24 @@
 # Add to the box's /etc/caddy/Caddyfile (same file that serves api.beein.lv).
 #
-# DNS first (Cloudflare dashboard for rc-tron.com):
-#   Type A · Name "signals" · Content 94.30.128.125 · Proxy status: DNS only (grey cloud)
-# Grey-cloud lets Caddy auto-issue a Let's Encrypt cert via TLS-ALPN-01 over the
-# already-forwarded :443. (No CF Origin cert needed — unlike the beein block.)
+# IMPORTANT: the box's :443 is only reachable through Cloudflare (the MikroTik
+# forward is CF-IP-gated, like api.beein.lv). A DNS-only / grey-cloud record
+# therefore CANNOT be reached by the public or by Let's Encrypt — Caddy can't
+# auto-issue a cert. So signals.rc-tron.com must be PROXIED (orange cloud) and
+# Caddy must present a Cloudflare Origin cert (CF SSL mode = Full (Strict)),
+# exactly like the api.beein.lv block.
+#
+# One-time setup:
+#  1. Cloudflare (rc-tron.com) -> SSL/TLS -> Origin Server -> Create Certificate,
+#     hostnames: rc-tron.com, *.rc-tron.com. Save on the box:
+#       /etc/caddy/certs/rc-tron-cert.pem   (the certificate)
+#       /etc/caddy/certs/rc-tron-key.pem    (the private key, chmod 600)
+#  2. Cloudflare DNS: signals  A  94.30.128.125  -> Proxied (orange cloud).
+#  3. Cloudflare (rc-tron.com) -> SSL/TLS -> Overview -> Full (Strict).
 #
 signals.rc-tron.com {
+	tls /etc/caddy/certs/rc-tron-cert.pem /etc/caddy/certs/rc-tron-key.pem
 	reverse_proxy 127.0.0.1:8090
 }
-# Then:  sudo systemctl reload caddy
-# Test:  curl https://signals.rc-tron.com/health
+# sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# sudo systemctl reload caddy
+# test:  curl https://signals.rc-tron.com/health
