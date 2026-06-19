@@ -28,4 +28,9 @@ module.exports = {
 		secret: process.env.BYBIT_API_SECRET || "",
 		recvWindow: process.env.BYBIT_RECV_WINDOW || "5000",
 	},
+	telegram: {
+		token: process.env.TELEGRAM_BOT_TOKEN || "",
+		allowedChats: (process.env.TELEGRAM_ALLOWED_CHATS || "")
+			.split(",").map((s) => s.trim()).filter(Boolean),
+	},
 };

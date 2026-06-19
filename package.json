@@ -7,7 +7,8 @@
 	"scripts": {
 		"start": "node src/index.js",
 		"smoke": "node test/smoke.js",
-		"mcp": "node mcp/server.js"
+		"bot": "node bot/telegram.js",
+		"mcp": "node mcp/server.mjs"
 	},
 	"engines": {
 		"node": ">=18"

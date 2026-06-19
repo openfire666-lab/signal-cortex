@@ -1,0 +1,20 @@
+# /etc/systemd/system/signal-cortex-bot.service
+# Telegram bot (Phase 3). Enable only after setting TELEGRAM_BOT_TOKEN in .env:
+#   sudo cp deploy/signal-cortex-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now signal-cortex-bot
+[Unit]
+Description=Signal Cortex — Telegram signal bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kaspars
+WorkingDirectory=/home/kaspars/signal-cortex
+EnvironmentFile=/home/kaspars/signal-cortex/.env
+ExecStart=/usr/bin/node bot/telegram.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

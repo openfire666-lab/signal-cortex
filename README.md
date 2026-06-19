@@ -72,6 +72,20 @@ TARGETS: 7.05 - 7.35 - 7.75
 STOP LOSS: 6.15'
 ```
 
+## Telegram bot (Phase 3)
+
+Forward (or paste) a signal to your bot → it replies with fresh Bybit analysis.
+Zero-dependency long-polling, reuses the engine.
+
+1. Create a bot with **@BotFather**, copy the token.
+2. On the box: set `TELEGRAM_BOT_TOKEN` (and optionally `TELEGRAM_ALLOWED_CHATS`) in `.env`.
+3. Enable the service:
+   ```bash
+   sudo cp deploy/signal-cortex-bot.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now signal-cortex-bot
+   ```
+4. DM or forward a signal block to the bot. `/start` prints usage.
+
 ## MCP surface (optional, Phase 2)
 
 ```bash
