@@ -12,5 +12,9 @@
 	},
 	"engines": {
 		"node": ">=18"
+	},
+	"optionalDependencies": {
+		"@modelcontextprotocol/sdk": "^1.0.0",
+		"zod": "^3.23.8"
 	}
 }

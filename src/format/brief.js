@@ -54,9 +54,14 @@ function analysisBrief(a) {
 	const L = [
 		`# Signal check — ${a.symbol} ${a.direction.toUpperCase()} ${lev}`.trim(),
 		``,
+	];
+	if (a.score != null) {
+		L.push(`**Quality: ${a.score}/100 (${a.scoreLabel})**  —  trend ${a.scoreParts.trend}/35 · R:R ${a.scoreParts.reward}/25 · entry ${a.scoreParts.exec}/20 · funding ${a.scoreParts.funding}/10 · stop ${a.scoreParts.stop}/10`, ``);
+	}
+	L.push(
 		`**Now ${num(a.price)}** · 24h ${pct(a.chg24)} · funding ${fund(a.funding)} · OI ${num(a.oi, 0)}`,
 		`**Setup:** ${a.setup}`,
-	];
+	);
 	if (!a.inZone) {
 		L.push(`**Trigger:** entry ${num(a.entryMid)} (${num(a.entry[0])}–${num(a.entry[1])}) is ${pct(a.distPct)} from price.`);
 	}

@@ -124,6 +124,38 @@ function estimateLiq(entry, lev, dir) {
 	return dir === "long" ? entry * (1 - m) : entry * (1 + m);
 }
 
+const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+// 0–100 signal-quality score (about the signal itself, not your account).
+function qualityScore({ agree, against, numTF, rr, inZone, distPct, funding, direction, slAtr }) {
+	// Trend alignment (0–35)
+	const align = numTF ? (agree - against) / numTF : 0; // -1..1
+	const trend = ((align + 1) / 2) * 35;
+	// First-target reward:risk (0–25) — 3R+ is full marks
+	const rr0 = rr.length && rr[0].rr != null ? rr[0].rr : 0;
+	const reward = clamp(rr0 / 3, 0, 1) * 25;
+	// Entry executability (0–20) — at-market best; far entries penalised
+	const exec = inZone ? 20 : clamp(1 - Math.abs(distPct) / 8, 0, 1) * 20;
+	// Funding (0–10) — reward funding that pays you, penalise the crowded side
+	let fundScore = 5;
+	if (funding != null) {
+		const f = funding * (direction === "long" ? 1 : -1); // >0 = you pay
+		fundScore = clamp(0.5 - f / 0.001, 0, 1) * 10;
+	}
+	// Stop sanity vs 1h ATR (0–10)
+	let stop = 5;
+	if (slAtr != null) stop = slAtr < 1 ? 2 : slAtr <= 5 ? 10 : 6;
+	const value = Math.round(trend + reward + exec + fundScore + stop);
+	const label = value >= 70 ? "strong" : value >= 50 ? "mixed" : value >= 30 ? "weak" : "poor";
+	return {
+		value, label,
+		parts: {
+			trend: Math.round(trend), reward: Math.round(reward),
+			exec: Math.round(exec), funding: Math.round(fundScore), stop: Math.round(stop),
+		},
+	};
+}
+
 async function maybeAccount(symbol, want) {
 	if (!want || !priv.hasKeys()) return null;
 	const out = {};
@@ -199,15 +231,34 @@ async function analyzeSignal(input) {
 		flags.push(`First target is sub-1R (${rr[0].rr}R) — poor reward vs the stop.`);
 	}
 
+	// Live account (positions/wallet) if requested + keys present.
+	const account = await maybeAccount(symbol, input.includeAccount);
+
+	// Account-aware flags — relate the signal to what you already hold.
+	if (account && account.positions) {
+		for (const p of account.positions) {
+			const pSide = p.side === "Buy" ? "long" : "short";
+			if (pSide === direction) {
+				const rel = p.entry ? ((entryMid - p.entry) / p.entry) * 100 : null;
+				flags.push(`You already hold ${direction} ${p.size} @ ${p.entry} — this ADDS in the same direction${rel != null ? ` (${rel > 0 ? "+" : ""}${rel.toFixed(1)}% vs your avg)` : ""}.`);
+			} else {
+				flags.push(`⚠ Counter to your open ${pSide} ${p.size} @ ${p.entry} — this would hedge/reduce, not open fresh.`);
+			}
+		}
+	}
+
+	const score = qualityScore({ agree, against, numTF: m.trend.length, rr, inZone, distPct, funding: m.funding, direction, slAtr });
+
 	return {
 		symbol, direction, leverage: lev, price,
 		chg24: m.chg24, funding: m.funding, oi: m.oi, high24: m.high24, low24: m.low24,
 		entry, entryMid, targets, stopLoss: sl,
 		inZone, distPct, setup,
 		risk, rr, slAtr, liq,
+		score: score.value, scoreLabel: score.label, scoreParts: score.parts,
 		trend: m.trend.map((t) => ({ key: t.key, dir: t.dir, rsi: t.rsi, ema50: t.ema50, ema200: t.ema200 })),
 		agree, against, supports: m.supports, resistances: m.resistances,
-		account: await maybeAccount(symbol, input.includeAccount),
+		account,
 		flags,
 		fetchedAt: new Date().toISOString(),
 	};

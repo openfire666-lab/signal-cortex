@@ -1,0 +1,9 @@
+{
+	"_comment": "Copy to .mcp.json (repo root) to use with Claude Code, or run `claude mcp add signal-cortex -- node mcp/server.mjs`. Requires `npm i` first (pulls the optional MCP deps). The server reads Bybit keys from .env.",
+	"mcpServers": {
+		"signal-cortex": {
+			"command": "node",
+			"args": ["mcp/server.mjs"]
+		}
+	}
+}

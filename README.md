@@ -88,13 +88,20 @@ Zero-dependency long-polling, reuses the engine.
 
 ## MCP surface (optional, Phase 2)
 
+Exposes the engine as native Claude Code tools (`market_snapshot`,
+`analyze_signal`) so the model calls them directly instead of fetching a URL.
+The same engine → same fresh data, quality score, account-aware flags.
+
 ```bash
-npm i @modelcontextprotocol/sdk zod
-node mcp/server.mjs           # stdio; tools: market_snapshot, analyze_signal
+npm i                          # installs the optional MCP deps (sdk + zod)
 ```
 
-Point Claude Code at it as an MCP server; the model calls the tools directly
-instead of fetching a URL.
+Register with Claude Code, either:
+- copy [mcp/config.example.json](mcp/config.example.json) → `.mcp.json` at the repo root, or
+- `claude mcp add signal-cortex -- node mcp/server.mjs`
+
+The server reads Bybit keys from `.env`, so `analyze_signal` can include your
+live position too. Run standalone with `npm run mcp`.
 
 ## Deploy (RC-Tron box, 192.168.0.2)
 
