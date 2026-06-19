@@ -2,5 +2,6 @@ node_modules/
 .env
 *.log
 deploy/autodeploy.log
+data/
 .DS_Store
 .claude/settings.local.json

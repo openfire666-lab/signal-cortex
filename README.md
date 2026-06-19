@@ -74,8 +74,11 @@ STOP LOSS: 6.15'
 
 ## Telegram bot (Phase 3)
 
-Forward (or paste) a signal to your bot → it replies with fresh Bybit analysis.
-Zero-dependency long-polling, reuses the engine.
+Forward (or paste) a signal to your bot → it replies with fresh Bybit analysis
+(quality score + your live position). Zero-dependency long-polling, reuses the
+engine. Send **`/watch`** after a signal and the bot pings you with a fresh
+re-analysis the moment price reaches that signal's entry zone (`/watches` to
+list, `/unwatch` to clear). Watches persist across restarts in `data/watches.json`.
 
 1. Create a bot with **@BotFather**, copy the token.
 2. On the box: set `TELEGRAM_BOT_TOKEN` (and optionally `TELEGRAM_ALLOWED_CHATS`) in `.env`.
