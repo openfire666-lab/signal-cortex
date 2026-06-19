@@ -34,8 +34,16 @@ async function reply(chatId, text) {
 
 async function handle(msg) {
 	const chatId = msg.chat && msg.chat.id;
-	if (!chatId || !allowed(chatId)) return;
+	if (!chatId) return;
 	const text = msg.text || msg.caption || "";
+	console.log(`msg from chat ${chatId} (${msg.chat.username || msg.chat.first_name || "?"})`);
+
+	// /id always answers — even if not allow-listed — so you can discover your id.
+	if (/^\/id\b/.test(text)) {
+		return reply(chatId, `chat id: ${chatId}\nAdd it to TELEGRAM_ALLOWED_CHATS to lock the bot to you.`);
+	}
+
+	if (!allowed(chatId)) return;
 
 	if (/^\/(start|help)/.test(text)) {
 		return reply(chatId,
