@@ -16,6 +16,7 @@ const orderState = require("./state");
 const API = `https://api.telegram.org/bot${telegram.token}`;
 let watches = store.load();
 let alerts = alertStore.load();
+alerts.forEach((a) => { if (!a.id) a.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6); });
 const lastSignal = new Map(); // chatId -> last parsed signal (for /watch)
 
 async function call(method, params) {
@@ -36,8 +37,10 @@ function plain(md) {
 	return md.replace(/\*\*/g, "").replace(/^#+ /gm, "");
 }
 
-async function reply(chatId, text) {
-	await call("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true });
+async function reply(chatId, text, markup) {
+	const body = { chat_id: chatId, text, disable_web_page_preview: true };
+	if (markup) body.reply_markup = markup;
+	await call("sendMessage", body);
 }
 
 // Account/order alerts go to the allow-listed owner chats (never to randoms).
@@ -90,13 +93,28 @@ function clearWatches(chatId) {
 }
 
 // ── /alert — price triggers (virtual orders; no funds frozen) ─────────────────
-async function addAlert(chatId, text) {
-	const m = text.match(/^\/alert\s+(?:([A-Za-z]{2,15}USDT|[A-Za-z]{2,15})\s+)?(\d*\.?\d+)\s*(long|short)?/i);
-	if (!m) return reply(chatId, "Usage: /alert SYMBOL PRICE [long|short] — e.g. /alert XLMUSDT 0.205 long");
+function alertRows(chatId) {
+	const mine = alerts.filter((a) => a.chatId === chatId);
+	const rows = mine.map((a) => [{ text: `❌ ${a.symbol}${a.side ? " " + a.side.toUpperCase() : ""} @ ${a.target}`, callback_data: `al_rm_${a.id}` }]);
+	rows.push([{ text: "➕ New alert", callback_data: "al_add" }]);
+	return { mine, rows };
+}
+
+function alertMenu(chatId) {
+	const { mine, rows } = alertRows(chatId);
+	const text = mine.length
+		? "📋 Your price alerts — I ping you to place (fill) the order when price hits. No funds frozen. Tap ❌ to remove:"
+		: "No price alerts yet. Tap ➕ to add one (e.g. XLMUSDT 0.205 long).";
+	return reply(chatId, text, { inline_keyboard: rows });
+}
+
+async function createAlert(chatId, argstr) {
+	const m = String(argstr).match(/(?:([A-Za-z]{2,15}USDT|[A-Za-z]{2,15})\s+)?(\d*\.?\d+)\s*(long|short)?/i);
+	if (!m || !m[2]) return reply(chatId, "Send: SYMBOL PRICE [long|short] — e.g. XLMUSDT 0.205 long");
 	let symbol = m[1] ? m[1].toUpperCase() : null;
 	const last = lastSignal.get(chatId);
 	if (!symbol && last) symbol = last.symbol;
-	if (!symbol) return reply(chatId, "Which symbol? e.g. /alert XLMUSDT 0.205");
+	if (!symbol) return reply(chatId, "Which symbol? e.g. XLMUSDT 0.205");
 	if (!/USDT$/.test(symbol)) symbol += "USDT";
 	const target = parseFloat(m[2]);
 	const side = m[3] ? m[3].toLowerCase() : (last && last.symbol === symbol ? last.direction : null);
@@ -104,18 +122,35 @@ async function addAlert(chatId, text) {
 	if (isNaN(price)) return reply(chatId, `Couldn't fetch ${symbol} — check the symbol.`);
 	if (alerts.filter((a) => a.chatId === chatId).length >= 50) return reply(chatId, "Alert limit reached (50). /unalert to clear.");
 	const waitFor = price > target ? "drop" : "rise";
-	alerts.push({ chatId, symbol, target, side, waitFor, created: Date.now() });
+	const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+	alerts.push({ id, chatId, symbol, target, side, waitFor, created: Date.now() });
 	alertStore.save(alerts);
 	const away = (Math.abs(price - target) / price * 100).toFixed(2);
-	return reply(chatId, `📝 Alert: ${symbol}${side ? " " + side.toUpperCase() : ""} @ ${target} — now ${price} (${away}% away). I'll ping you when it hits. No funds frozen.\n/alerts · /unalert`);
+	return reply(chatId, `📝 Alert set: ${symbol}${side ? " " + side.toUpperCase() : ""} @ ${target} — now ${price} (${away}% away). I'll ping you when it hits. No funds frozen.`);
 }
 
-function listAlerts(chatId) {
-	const mine = alerts.filter((a) => a.chatId === chatId);
-	if (!mine.length) return reply(chatId, "No price alerts.");
-	return reply(chatId, "📝 Alerts:\n" +
-		mine.map((a, i) => `${i + 1}. ${a.symbol}${a.side ? " " + a.side.toUpperCase() : ""} @ ${a.target}`).join("\n") +
-		"\n\nSend /unalert to clear all.");
+async function onCallback(cb) {
+	const chatId = cb.message && cb.message.chat && cb.message.chat.id;
+	const data = cb.data || "";
+	if (!chatId || !allowed(chatId)) return call("answerCallbackQuery", { callback_query_id: cb.id });
+	if (data === "al_add") {
+		await call("answerCallbackQuery", { callback_query_id: cb.id });
+		return reply(chatId, "Send: SYMBOL PRICE [long|short]\ne.g.  XLMUSDT 0.205 long", { force_reply: true });
+	}
+	if (data.startsWith("al_rm_")) {
+		const id = data.slice(6);
+		const before = alerts.length;
+		alerts = alerts.filter((a) => !(a.chatId === chatId && a.id === id));
+		if (alerts.length !== before) alertStore.save(alerts);
+		await call("answerCallbackQuery", { callback_query_id: cb.id, text: "Removed" });
+		const { mine, rows } = alertRows(chatId);
+		return call("editMessageText", {
+			chat_id: chatId, message_id: cb.message.message_id,
+			text: mine.length ? "📋 Your price alerts. Tap ❌ to remove:" : "No price alerts. Tap ➕ to add one.",
+			reply_markup: { inline_keyboard: rows },
+		});
+	}
+	return call("answerCallbackQuery", { callback_query_id: cb.id });
 }
 
 function clearAlerts(chatId) {
@@ -172,14 +207,19 @@ async function handle(msg) {
 	}
 	if (!allowed(chatId)) return;
 
+	// Reply to the "➕ New alert" prompt → create the alert.
+	if (msg.reply_to_message && /^Send: SYMBOL PRICE/.test(msg.reply_to_message.text || "")) {
+		return createAlert(chatId, text);
+	}
+
 	if (/^\/(start|help)/.test(text)) {
 		return reply(chatId,
 			"Forward me a signal (COIN / Direction / ENTRY / TARGETS / STOP LOSS) and I'll analyze it " +
 			"against fresh Bybit data — quality score + your live position.\n\n" +
 			"Commands:\n" +
 			"/watch — ping me when the last signal's price reaches its entry zone\n" +
-			"/alert SYMBOL PRICE [long|short] — ping when a price is hit (virtual order, no funds frozen)\n" +
-			"/watches · /alerts — list   ·   /unwatch · /unalert — clear\n" +
+			"/alert — menu of your price alerts (➕ add / ❌ remove). Or: /alert XLMUSDT 0.205 long\n" +
+			"/watches · /unwatch — watches   ·   /unalert — clear alerts\n" +
 			"/pos — your open positions (live PnL, liq distance)\n" +
 			"/orders — your resting orders (distance to price)\n\n" +
 			"I also auto-ping you when an order nears its price or fills.");
@@ -187,9 +227,12 @@ async function handle(msg) {
 	if (/^\/watches\b/.test(text)) return listWatches(chatId);
 	if (/^\/(unwatch|clear)\b/.test(text)) return clearWatches(chatId);
 	if (/^\/watch\b/.test(text)) return addWatch(chatId);
-	if (/^\/alerts\b/.test(text)) return listAlerts(chatId);
+	if (/^\/alerts\b/.test(text)) return alertMenu(chatId);
 	if (/^\/unalert\b/.test(text)) return clearAlerts(chatId);
-	if (/^\/alert\b/.test(text)) return addAlert(chatId, text);
+	if (/^\/alert\b/.test(text)) {
+		const rest = text.replace(/^\/alert\s*/i, "").trim();
+		return rest ? createAlert(chatId, rest) : alertMenu(chatId);
+	}
 	if (/^\/pos\b/.test(text)) return showPositions(chatId);
 	if (/^\/orders\b/.test(text)) return showOrders(chatId);
 
@@ -252,7 +295,8 @@ async function checkAlerts() {
 				const mk = await engine.fetchMarket(al.symbol);
 				msg += `\n24h ${mk.chg24 != null ? (mk.chg24 > 0 ? "+" : "") + mk.chg24.toFixed(2) + "%" : "—"} · funding ${mk.funding != null ? (mk.funding * 100).toFixed(4) + "%" : "—"}`;
 			} catch { /* snapshot optional */ }
-			await reply(al.chatId, msg);
+			const url = `https://www.bybit.com/trade/usdt/${al.symbol}`;
+			await reply(al.chatId, msg, { inline_keyboard: [[{ text: `📈 Open ${al.symbol} on Bybit`, url }]] });
 		} catch (e) {
 			keep.push(al);
 			console.error("alert:", al.symbol, e.message);
@@ -323,11 +367,12 @@ async function main() {
 	let offset = 0;
 	for (;;) {
 		try {
-			const r = await call("getUpdates", { offset, timeout: 30, allowed_updates: ["message"] });
+			const r = await call("getUpdates", { offset, timeout: 30, allowed_updates: ["message", "callback_query"] });
 			if (r.ok) {
 				for (const u of r.result) {
 					offset = u.update_id + 1;
 					if (u.message) await handle(u.message).catch((e) => console.error("handle:", e.message));
+					else if (u.callback_query) await onCallback(u.callback_query).catch((e) => console.error("callback:", e.message));
 				}
 			}
 		} catch (e) {
