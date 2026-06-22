@@ -79,4 +79,7 @@ module.exports = {
 	// Cancel one resting order — needs the Trade permission.
 	cancelOrder: (symbol, orderId) =>
 		signedPost("/v5/order/cancel", { category: bybit.category, symbol, orderId }),
+	// Set a position's stop-loss / take-profit — needs the Trade permission.
+	setTradingStop: (symbol, params) =>
+		signedPost("/v5/position/trading-stop", { category: bybit.category, symbol, ...params }),
 };

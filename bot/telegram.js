@@ -4,7 +4,7 @@
 // score + your live position). /watch a signal to get pinged at its entry zone.
 // Order monitor: pings you when an open Bybit order nears its price or fills.
 // Zero-dependency long-polling; reuses the HTTP engine.
-const { telegram, monitor, trade } = require("../src/config");
+const { telegram, monitor, trade, place } = require("../src/config");
 const engine = require("../src/analyze/engine");
 const brief = require("../src/format/brief");
 const pub = require("../src/bybit/public");
@@ -248,6 +248,17 @@ async function onCallback(cb) {
 		}
 	}
 
+	// 🛑/🎯 Set a stop-loss / take-profit on a position (opt-in, PLACE_ENABLED).
+	if (data.startsWith("psl_") || data.startsWith("ptp_")) {
+		await ack();
+		if (!place.enabled) return reply(chatId, "Order placing is off (set PLACE_ENABLED=on).");
+		const isSL = data.startsWith("psl_");
+		const rest = data.slice(4);
+		const u = rest.lastIndexOf("_");
+		const symbol = rest.slice(0, u), idx = rest.slice(u + 1);
+		return reply(chatId, `${isSL ? "Stop-loss" : "Take-profit"} price for ${symbol} [idx ${idx}]:`, { force_reply: true });
+	}
+
 	return ack();
 }
 
@@ -259,20 +270,47 @@ function clearAlerts(chatId) {
 }
 
 // ── account commands ─────────────────────────────────────────────────────────
+async function buildPositions() {
+	const r = await priv.positions();
+	const ps = (r.list || []).filter((x) => +x.size > 0);
+	if (!ps.length) return { text: "No open positions.", reply_markup: null };
+	const cache = {};
+	const lines = [];
+	const kb = [];
+	for (const p of ps) {
+		const price = await priceOf(p.symbol, cache);
+		const liq = +p.liqPrice;
+		const liqTxt = (price && liq) ? `, liq ${p.liqPrice} (${(Math.abs(price - liq) / price * 100).toFixed(1)}% away)` : `, liq ${p.liqPrice}`;
+		const sl = (p.stopLoss && +p.stopLoss) ? ` · SL ${p.stopLoss}` : "";
+		const tp = (p.takeProfit && +p.takeProfit) ? ` · TP ${p.takeProfit}` : "";
+		lines.push(`• ${p.symbol} ${p.side === "Buy" ? "LONG" : "SHORT"} ${p.size} @ ${p.avgPrice} · ${p.leverage}x · uPnL ${p.unrealisedPnl}${liqTxt}${sl}${tp}`);
+		if (place.enabled) {
+			kb.push([
+				{ text: `🛑 SL ${p.symbol}`, callback_data: `psl_${p.symbol}_${p.positionIdx || 0}` },
+				{ text: `🎯 TP ${p.symbol}`, callback_data: `ptp_${p.symbol}_${p.positionIdx || 0}` },
+			]);
+		}
+	}
+	return { text: "📊 Positions:\n" + lines.join("\n"), reply_markup: kb.length ? { inline_keyboard: kb } : null };
+}
+
 async function showPositions(chatId) {
 	if (!priv.hasKeys()) return reply(chatId, "No Bybit key configured.");
 	try {
-		const r = await priv.positions();
-		const ps = (r.list || []).filter((x) => +x.size > 0);
-		if (!ps.length) return reply(chatId, "No open positions.");
-		const cache = {};
-		const lines = await Promise.all(ps.map(async (p) => {
-			const price = await priceOf(p.symbol, cache);
-			const liq = +p.liqPrice;
-			const liqTxt = (price && liq) ? `, liq ${p.liqPrice} (${(Math.abs(price - liq) / price * 100).toFixed(1)}% away)` : `, liq ${p.liqPrice}`;
-			return `• ${p.symbol} ${p.side === "Buy" ? "LONG" : "SHORT"} ${p.size} @ ${p.avgPrice} · ${p.leverage}x · uPnL ${p.unrealisedPnl}${liqTxt}`;
-		}));
-		return reply(chatId, "📊 Positions:\n" + lines.join("\n"));
+		const { text, reply_markup } = await buildPositions();
+		return reply(chatId, text, reply_markup || undefined);
+	} catch (e) { return reply(chatId, `⚠ ${e.message}`); }
+}
+
+async function setStop(chatId, kind, symbol, idx, priceStr) {
+	const price = parseFloat(priceStr);
+	if (isNaN(price)) return reply(chatId, "Send a number, e.g. 0.205");
+	if (!place.enabled) return reply(chatId, "Order placing is off (set PLACE_ENABLED=on).");
+	try {
+		const params = { positionIdx: idx };
+		if (/stop/i.test(kind)) params.stopLoss = String(price); else params.takeProfit = String(price);
+		await priv.setTradingStop(symbol, params);
+		return reply(chatId, `✅ ${/stop/i.test(kind) ? "Stop-loss" : "Take-profit"} set on ${symbol} @ ${price}.`);
 	} catch (e) { return reply(chatId, `⚠ ${e.message}`); }
 }
 
@@ -373,6 +411,8 @@ async function handle(msg) {
 		if (/^Send: SYMBOL PRICE/.test(rt)) return createAlert(chatId, text);
 		const pm = rt.match(/^Price for ([A-Z0-9]+) (LONG|SHORT)/i);
 		if (pm) return createAlert(chatId, `${pm[1]} ${text} ${pm[2]}`);
+		const sm = rt.match(/^(Stop-loss|Take-profit) price for ([A-Z0-9]+) \[idx (\d+)\]/i);
+		if (sm) return setStop(chatId, sm[1], sm[2], +sm[3], text);
 	}
 
 	if (/^\/(start|help)/.test(text)) {

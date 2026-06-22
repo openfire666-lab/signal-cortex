@@ -45,6 +45,10 @@ module.exports = {
 		// Suggested position size targets this % of equity at risk (entry→stop).
 		riskPct: parseFloat(process.env.RISK_PCT || "2"),
 	},
+	place: {
+		// Master switch for the SL/TP helper (placing orders). Off until PLACE_ENABLED=on.
+		enabled: process.env.PLACE_ENABLED === "on",
+	},
 	userbot: {
 		apiId: parseInt(process.env.TELEGRAM_API_ID || "0", 10),
 		apiHash: process.env.TELEGRAM_API_HASH || "",
