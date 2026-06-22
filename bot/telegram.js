@@ -16,6 +16,20 @@ const sigStore = require("./signals");
 const histStore = require("./history");
 
 const API = `https://api.telegram.org/bot${telegram.token}`;
+
+// Registered with Telegram so the "/" autocomplete + ☰ menu list every command.
+const BOT_COMMANDS = [
+	{ command: "alert", description: "Set a price alert (virtual order, no funds frozen)" },
+	{ command: "alerts", description: "List / manage your price alerts" },
+	{ command: "watch", description: "Ping at the last signal's entry zone" },
+	{ command: "watches", description: "List your watches" },
+	{ command: "pos", description: "Your open positions" },
+	{ command: "orders", description: "Your resting orders (tap to cancel)" },
+	{ command: "stats", description: "Channel scorecard (win-rate)" },
+	{ command: "digest", description: "Morning summary now" },
+	{ command: "help", description: "Show all commands" },
+];
+
 let watches = store.load();
 let alerts = alertStore.load();
 alerts.forEach((a) => { if (!a.id) a.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6); });
@@ -533,6 +547,7 @@ async function main() {
 		process.exit(1);
 	}
 	const me = await call("getMe");
+	await call("setMyCommands", { commands: BOT_COMMANDS }).catch((e) => console.error("setMyCommands:", e.message));
 	console.log(`telegram bot polling as @${me.result ? me.result.username : "?"} (${watches.length} watch(es) loaded)`);
 	const tick = () => {
 		maybeDigest().catch((e) => console.error("digest:", e.message));
