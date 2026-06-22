@@ -32,6 +32,32 @@ async function signedGet(pathname, params = {}) {
 	return json.result;
 }
 
+// Signed POST — needs the Unified Trading "Trade" permission. Only used to CANCEL
+// resting orders (this service never PLACES orders).
+async function signedPost(pathname, body = {}) {
+	if (!bybit.key || !bybit.secret) {
+		throw new Error("Bybit API key/secret not configured.");
+	}
+	const json = JSON.stringify(body);
+	const timestamp = Date.now().toString();
+	const res = await fetch(`${bybit.base}${pathname}`, {
+		method: "POST",
+		headers: {
+			"X-BAPI-API-KEY": bybit.key,
+			"X-BAPI-TIMESTAMP": timestamp,
+			"X-BAPI-RECV-WINDOW": bybit.recvWindow,
+			"X-BAPI-SIGN": sign(timestamp, json),
+			"Content-Type": "application/json",
+		},
+		body: json,
+	});
+	const j = await res.json();
+	if (j.retCode !== 0) {
+		throw new Error(`Bybit ${pathname} retCode=${j.retCode} ${j.retMsg}`);
+	}
+	return j.result;
+}
+
 module.exports = {
 	hasKeys: () => Boolean(bybit.key && bybit.secret),
 	positions: (symbol) =>
@@ -47,4 +73,7 @@ module.exports = {
 		}),
 	walletBalance: (accountType = "UNIFIED") =>
 		signedGet("/v5/account/wallet-balance", { accountType }),
+	// Cancel one resting order — needs the Trade permission.
+	cancelOrder: (symbol, orderId) =>
+		signedPost("/v5/order/cancel", { category: bybit.category, symbol, orderId }),
 };

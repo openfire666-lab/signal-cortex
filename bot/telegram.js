@@ -214,6 +214,22 @@ async function onCallback(cb) {
 		});
 	}
 
+	// ✖ Cancel a real Bybit order (needs the Trade permission on the key).
+	if (data.startsWith("ocx_")) {
+		const orderId = data.slice(4);
+		try {
+			const r = await priv.openOrders();
+			const o = (r.list || []).find((x) => x.orderId === orderId);
+			if (!o) { await ack("Already gone"); }
+			else { await priv.cancelOrder(o.symbol, orderId); await ack(`Cancelled ${o.symbol}`); }
+			const { text, reply_markup } = await buildOrders();
+			return call("editMessageText", { chat_id: chatId, message_id: mid, text, reply_markup: reply_markup || undefined });
+		} catch (e) {
+			await ack("Failed");
+			return reply(chatId, `⚠ cancel failed: ${e.message}`);
+		}
+	}
+
 	return ack();
 }
 
@@ -242,22 +258,28 @@ async function showPositions(chatId) {
 	} catch (e) { return reply(chatId, `⚠ ${e.message}`); }
 }
 
+async function buildOrders() {
+	const r = await priv.openOrders();
+	const os = r.list || [];
+	if (!os.length) return { text: "No open orders.", reply_markup: null };
+	const cache = {};
+	const lines = [];
+	const kb = [];
+	for (const o of os) {
+		const price = await priceOf(o.symbol, cache);
+		const op = +o.price;
+		const dist = (price && op) ? ` · now ${price} (${(Math.abs(price - op) / op * 100).toFixed(2)}% away)` : "";
+		lines.push(`• ${o.symbol} ${o.side} ${o.qty} @ ${o.price} [${o.orderStatus}]${dist}`);
+		kb.push([{ text: `✖ Cancel ${o.symbol} ${o.side} @ ${o.price}`, callback_data: `ocx_${o.orderId}` }]);
+	}
+	return { text: "🧾 Open orders — tap ✖ to cancel (frees the margin):\n" + lines.join("\n"), reply_markup: { inline_keyboard: kb } };
+}
+
 async function showOrders(chatId) {
 	if (!priv.hasKeys()) return reply(chatId, "No Bybit key configured.");
 	try {
-		const r = await priv.openOrders();
-		const os = r.list || [];
-		if (!os.length) return reply(chatId, "No open orders.");
-		const cache = {};
-		const lines = await Promise.all(os.map(async (o) => {
-			const price = await priceOf(o.symbol, cache);
-			const op = +o.price;
-			const dist = (price && op) ? ` · now ${price} (${(Math.abs(price - op) / op * 100).toFixed(2)}% away)` : "";
-			return `• ${o.symbol} ${o.side} ${o.qty} @ ${o.price} [${o.orderStatus}]${dist}`;
-		}));
-		const syms = [...new Set(os.map((o) => o.symbol))];
-		const kb = syms.map((s) => [{ text: `✖ Cancel ${s} on Bybit`, url: `https://www.bybit.com/trade/usdt/${s}` }]);
-		return reply(chatId, "🧾 Open orders:\n" + lines.join("\n") + "\n\nTap to cancel on Bybit (frees the locked margin):", { inline_keyboard: kb });
+		const { text, reply_markup } = await buildOrders();
+		return reply(chatId, text, reply_markup || undefined);
 	} catch (e) { return reply(chatId, `⚠ ${e.message}`); }
 }
 
