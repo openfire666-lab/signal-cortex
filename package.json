@@ -8,6 +8,8 @@
 		"start": "node src/index.js",
 		"smoke": "node test/smoke.js",
 		"bot": "node bot/telegram.js",
+		"userbot": "node bot/userbot.js",
+		"userbot-login": "node bot/userbot-login.js",
 		"mcp": "node mcp/server.mjs"
 	},
 	"engines": {
@@ -15,6 +17,7 @@
 	},
 	"optionalDependencies": {
 		"@modelcontextprotocol/sdk": "^1.0.0",
-		"zod": "^3.23.8"
+		"zod": "^3.23.8",
+		"telegram": "^2.22.2"
 	}
 }

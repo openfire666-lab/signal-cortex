@@ -37,4 +37,10 @@ module.exports = {
 		// Alert when an open order's price is within this % of the live price.
 		orderNearPct: parseFloat(process.env.ORDER_NEAR_PCT || "1"),
 	},
+	userbot: {
+		apiId: parseInt(process.env.TELEGRAM_API_ID || "0", 10),
+		apiHash: process.env.TELEGRAM_API_HASH || "",
+		session: process.env.TELEGRAM_SESSION || "",   // produced by userbot-login
+		channel: process.env.BK_CHANNEL || "",         // @username or numeric id
+	},
 };

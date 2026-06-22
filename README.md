@@ -89,6 +89,26 @@ list, `/unwatch` to clear). Watches persist across restarts in `data/watches.jso
    ```
 4. DM or forward a signal block to the bot. `/start` prints usage.
 
+## Channel reader / userbot (Phase 4)
+
+Reads a signal channel (e.g. Binance Killers) **as you** (you're a member),
+parses each new post, analyzes it, and pushes the brief to your bot DM.
+Read-only — never trades. Uses GramJS (MTProto).
+
+1. **my.telegram.org** → create an app → set `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` in `.env`.
+2. `cd ~/signal-cortex && npm install` (pulls GramJS).
+3. `node bot/userbot-login.js` — enter phone + the code Telegram sends (+ 2FA if any).
+   It prints a **session string** → set `TELEGRAM_SESSION`, and lists your channels →
+   set `BK_CHANNEL` to Binance Killers' `@username` (or id).
+4. Enable the service:
+   ```bash
+   sudo cp deploy/signal-cortex-userbot.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now signal-cortex-userbot
+   ```
+
+Now every new signal in the channel auto-arrives in your bot DM, scored and
+read against your live position — no forwarding.
+
 ## MCP surface (optional, Phase 2)
 
 Exposes the engine as native Claude Code tools (`market_snapshot`,

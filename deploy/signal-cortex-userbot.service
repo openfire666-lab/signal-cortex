@@ -1,0 +1,21 @@
+# /etc/systemd/system/signal-cortex-userbot.service
+# Channel reader (Phase 4). Enable AFTER `npm install` + a TELEGRAM_SESSION
+# (from userbot-login.js) + BK_CHANNEL are set in .env:
+#   sudo cp deploy/signal-cortex-userbot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now signal-cortex-userbot
+[Unit]
+Description=Signal Cortex — Telegram channel reader (userbot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kaspars
+WorkingDirectory=/home/kaspars/signal-cortex
+EnvironmentFile=/home/kaspars/signal-cortex/.env
+ExecStart=/usr/bin/node bot/userbot.js
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
