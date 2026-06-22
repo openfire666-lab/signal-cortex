@@ -54,7 +54,11 @@ async function onMessage(event) {
 	const client = new TelegramClient(new StringSession(userbot.session), userbot.apiId, userbot.apiHash, { connectionRetries: 5 });
 	await client.connect();
 	const me = await client.getMe();
-	const filter = userbot.channel ? { chats: [userbot.channel] } : {};
+	// Load dialogs so a private channel (by numeric id, no @username) resolves
+	// from cache — GramJS needs the access hash, which dialogs populate.
+	try { await client.getDialogs({ limit: 200 }); } catch (e) { console.error("getDialogs:", e.message); }
+	const ch = /^-?\d+$/.test(userbot.channel) ? Number(userbot.channel) : userbot.channel;
+	const filter = userbot.channel ? { chats: [ch] } : {};
 	client.addEventHandler((e) => onMessage(e).catch((err) => console.error("onMessage:", err.message)), new NewMessage(filter));
-	console.log(`userbot connected as ${me.username || me.firstName}; reading ${userbot.channel || "ALL chats"} → @bot DM`);
+	console.log(`userbot connected as ${me.username || me.firstName}; reading ${userbot.channel || "ALL chats"} → bot DM`);
 })().catch((e) => { console.error(e); process.exit(1); });
