@@ -33,4 +33,8 @@ module.exports = {
 		allowedChats: (process.env.TELEGRAM_ALLOWED_CHATS || "")
 			.split(",").map((s) => s.trim()).filter(Boolean),
 	},
+	monitor: {
+		// Alert when an open order's price is within this % of the live price.
+		orderNearPct: parseFloat(process.env.ORDER_NEAR_PCT || "1"),
+	},
 };

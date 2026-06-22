@@ -39,6 +39,12 @@ module.exports = {
 			category: bybit.category,
 			...(symbol ? { symbol } : { settleCoin: "USDT" }),
 		}),
+	// Open (resting/active) orders — needs the "Orders" read permission.
+	openOrders: (symbol) =>
+		signedGet("/v5/order/realtime", {
+			category: bybit.category,
+			...(symbol ? { symbol } : { settleCoin: "USDT" }),
+		}),
 	walletBalance: (accountType = "UNIFIED") =>
 		signedGet("/v5/account/wallet-balance", { accountType }),
 };
