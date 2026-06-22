@@ -10,10 +10,12 @@ const brief = require("../src/format/brief");
 const pub = require("../src/bybit/public");
 const priv = require("../src/bybit/private");
 const store = require("./watches");
+const alertStore = require("./alerts");
 const orderState = require("./state");
 
 const API = `https://api.telegram.org/bot${telegram.token}`;
 let watches = store.load();
+let alerts = alertStore.load();
 const lastSignal = new Map(); // chatId -> last parsed signal (for /watch)
 
 async function call(method, params) {
@@ -87,6 +89,42 @@ function clearWatches(chatId) {
 	return reply(chatId, `Cleared ${before - watches.length} watch(es).`);
 }
 
+// ── /alert — price triggers (virtual orders; no funds frozen) ─────────────────
+async function addAlert(chatId, text) {
+	const m = text.match(/^\/alert\s+(?:([A-Za-z]{2,15}USDT|[A-Za-z]{2,15})\s+)?(\d*\.?\d+)\s*(long|short)?/i);
+	if (!m) return reply(chatId, "Usage: /alert SYMBOL PRICE [long|short] — e.g. /alert XLMUSDT 0.205 long");
+	let symbol = m[1] ? m[1].toUpperCase() : null;
+	const last = lastSignal.get(chatId);
+	if (!symbol && last) symbol = last.symbol;
+	if (!symbol) return reply(chatId, "Which symbol? e.g. /alert XLMUSDT 0.205");
+	if (!/USDT$/.test(symbol)) symbol += "USDT";
+	const target = parseFloat(m[2]);
+	const side = m[3] ? m[3].toLowerCase() : (last && last.symbol === symbol ? last.direction : null);
+	const price = await priceOf(symbol);
+	if (isNaN(price)) return reply(chatId, `Couldn't fetch ${symbol} — check the symbol.`);
+	if (alerts.filter((a) => a.chatId === chatId).length >= 50) return reply(chatId, "Alert limit reached (50). /unalert to clear.");
+	const waitFor = price > target ? "drop" : "rise";
+	alerts.push({ chatId, symbol, target, side, waitFor, created: Date.now() });
+	alertStore.save(alerts);
+	const away = (Math.abs(price - target) / price * 100).toFixed(2);
+	return reply(chatId, `📝 Alert: ${symbol}${side ? " " + side.toUpperCase() : ""} @ ${target} — now ${price} (${away}% away). I'll ping you when it hits. No funds frozen.\n/alerts · /unalert`);
+}
+
+function listAlerts(chatId) {
+	const mine = alerts.filter((a) => a.chatId === chatId);
+	if (!mine.length) return reply(chatId, "No price alerts.");
+	return reply(chatId, "📝 Alerts:\n" +
+		mine.map((a, i) => `${i + 1}. ${a.symbol}${a.side ? " " + a.side.toUpperCase() : ""} @ ${a.target}`).join("\n") +
+		"\n\nSend /unalert to clear all.");
+}
+
+function clearAlerts(chatId) {
+	const before = alerts.length;
+	alerts = alerts.filter((a) => a.chatId !== chatId);
+	alertStore.save(alerts);
+	return reply(chatId, `Cleared ${before - alerts.length} alert(s).`);
+}
+
 // ── account commands ─────────────────────────────────────────────────────────
 async function showPositions(chatId) {
 	if (!priv.hasKeys()) return reply(chatId, "No Bybit key configured.");
@@ -140,7 +178,8 @@ async function handle(msg) {
 			"against fresh Bybit data — quality score + your live position.\n\n" +
 			"Commands:\n" +
 			"/watch — ping me when the last signal's price reaches its entry zone\n" +
-			"/watches · /unwatch — list / clear watches\n" +
+			"/alert SYMBOL PRICE [long|short] — ping when a price is hit (virtual order, no funds frozen)\n" +
+			"/watches · /alerts — list   ·   /unwatch · /unalert — clear\n" +
 			"/pos — your open positions (live PnL, liq distance)\n" +
 			"/orders — your resting orders (distance to price)\n\n" +
 			"I also auto-ping you when an order nears its price or fills.");
@@ -148,6 +187,9 @@ async function handle(msg) {
 	if (/^\/watches\b/.test(text)) return listWatches(chatId);
 	if (/^\/(unwatch|clear)\b/.test(text)) return clearWatches(chatId);
 	if (/^\/watch\b/.test(text)) return addWatch(chatId);
+	if (/^\/alerts\b/.test(text)) return listAlerts(chatId);
+	if (/^\/unalert\b/.test(text)) return clearAlerts(chatId);
+	if (/^\/alert\b/.test(text)) return addAlert(chatId, text);
 	if (/^\/pos\b/.test(text)) return showPositions(chatId);
 	if (/^\/orders\b/.test(text)) return showOrders(chatId);
 
@@ -192,6 +234,31 @@ async function checkWatches() {
 		}
 	}
 	if (keep.length !== watches.length) { watches = keep; store.save(watches); }
+}
+
+// ── price-alert checker — ping when a target (virtual order) price is reached ──
+async function checkAlerts() {
+	if (!alerts.length) return;
+	const keep = [];
+	const cache = {};
+	for (const al of alerts) {
+		try {
+			const price = await priceOf(al.symbol, cache);
+			if (isNaN(price)) { keep.push(al); continue; }
+			const hit = al.waitFor === "drop" ? price <= al.target : price >= al.target;
+			if (!hit) { keep.push(al); continue; }
+			let msg = `🔔 ${al.symbol} reached ${al.target} — now ${price}.${al.side ? ` Your ${al.side.toUpperCase()} entry is live.` : ""} Place your order now (no funds were frozen).`;
+			try {
+				const mk = await engine.fetchMarket(al.symbol);
+				msg += `\n24h ${mk.chg24 != null ? (mk.chg24 > 0 ? "+" : "") + mk.chg24.toFixed(2) + "%" : "—"} · funding ${mk.funding != null ? (mk.funding * 100).toFixed(4) + "%" : "—"}`;
+			} catch { /* snapshot optional */ }
+			await reply(al.chatId, msg);
+		} catch (e) {
+			keep.push(al);
+			console.error("alert:", al.symbol, e.message);
+		}
+	}
+	if (keep.length !== alerts.length) { alerts = keep; alertStore.save(alerts); }
 }
 
 // ── order monitor — approach + fill alerts on your real Bybit orders ──────────
@@ -247,6 +314,7 @@ async function main() {
 	console.log(`telegram bot polling as @${me.result ? me.result.username : "?"} (${watches.length} watch(es) loaded)`);
 	const tick = () => {
 		checkWatches().catch((e) => console.error("checkWatches:", e.message));
+		checkAlerts().catch((e) => console.error("checkAlerts:", e.message));
 		checkOrders().catch((e) => console.error("checkOrders:", e.message));
 	};
 	tick();                         // prime state + immediate near-alerts
