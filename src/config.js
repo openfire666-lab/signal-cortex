@@ -36,6 +36,8 @@ module.exports = {
 	monitor: {
 		// Alert when an open order's price is within this % of the live price.
 		orderNearPct: parseFloat(process.env.ORDER_NEAR_PCT || "1"),
+		// Alert when an open position is within this % of its liquidation price.
+		liqNearPct: parseFloat(process.env.LIQ_NEAR_PCT || "8"),
 	},
 	userbot: {
 		apiId: parseInt(process.env.TELEGRAM_API_ID || "0", 10),

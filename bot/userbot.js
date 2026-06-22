@@ -11,9 +11,11 @@ const { userbot, telegram } = require("../src/config");
 const engine = require("../src/analyze/engine");
 const brief = require("../src/format/brief");
 const sigStore = require("./signals");
+const histStore = require("./history");
 
 const BOT_API = `https://api.telegram.org/bot${telegram.token}`;
 let openSignals = sigStore.load();
+let history = histStore.load();
 
 const plain = (md) => md.replace(/\*\*/g, "").replace(/^#+ /gm, "");
 
@@ -49,6 +51,28 @@ function closeOpen(id, symbol) {
 	if (openSignals.length !== before) sigStore.save(openSignals);
 }
 
+// ── scorecard history ─────────────────────────────────────────────────────────
+function recordOpen(sig) {
+	if (sig.id && history.find((h) => h.id === sig.id)) return;
+	history.unshift({ id: sig.id, symbol: sig.symbol, direction: sig.direction, entry: sig.entry, targets: sig.targets, sl: sig.sl, posted: Date.now(), status: "open", targetsHit: 0, pnlPct: null, closed: null });
+	history = history.slice(0, 500);
+	histStore.save(history);
+}
+
+function recordOutcome(id, symbol, o) {
+	let rec = id ? history.find((h) => h.id === id) : null;
+	if (!rec) rec = history.find((h) => h.symbol === symbol && h.status === "open");
+	if (!rec) {
+		rec = { id, symbol, direction: null, entry: null, targets: null, sl: null, posted: null, status: "open", targetsHit: 0, pnlPct: null, closed: null };
+		history.unshift(rec);
+	}
+	if (o.targetsHit != null && o.targetsHit > (rec.targetsHit || 0)) rec.targetsHit = o.targetsHit;
+	if (o.stopped) { rec.status = "lost"; if (o.pnlPct != null) rec.pnlPct = -Math.abs(o.pnlPct); }
+	else { rec.status = "won"; if (o.pnlPct != null) rec.pnlPct = Math.abs(o.pnlPct); }
+	rec.closed = Date.now();
+	histStore.save(history);
+}
+
 // Process one channel message. doNotify=false during startup backfill.
 async function ingest(text, doNotify) {
 	if (!text) return;
@@ -56,7 +80,9 @@ async function ingest(text, doNotify) {
 	const parsed = engine.parseSignal(text);
 
 	if (hasEntry && parsed.symbol) {
-		addOpen({ id, symbol: parsed.symbol, direction: parsed.direction, entry: parsed.entry, targets: parsed.targets, sl: parsed.stopLoss });
+		const sig = { id, symbol: parsed.symbol, direction: parsed.direction, entry: parsed.entry, targets: parsed.targets, sl: parsed.stopLoss };
+		addOpen(sig);
+		recordOpen(sig);
 		if (doNotify) {
 			const a = await engine.analyzeSignal({ ...parsed, includeAccount: telegram.allowedChats.length > 0 });
 			await notify(`📡 ${userbot.channel || "VIP"} — ${parsed.symbol} ${String(parsed.direction).toUpperCase()}\n\n` + plain(brief.analysisBrief(a)));
@@ -66,11 +92,13 @@ async function ingest(text, doNotify) {
 
 	if (isUpdate && parsed.symbol) {
 		closeOpen(id, parsed.symbol);
+		const hits = (text.match(/Target\s*\d+\s*:[^✅]*✅/gi) || []).length;
+		const pm = text.match(/([\d.]+)\s*%\s*(Profit|Loss)/i);
+		const pnlNum = pm ? parseFloat(pm[1]) : null;
+		const stopped = /STOP\s*LOSS:.*🚫/i.test(text) || (pm && /Loss/i.test(pm[2]));
+		recordOutcome(id, parsed.symbol, { targetsHit: hits, pnlPct: pnlNum, stopped });
 		if (doNotify) {
-			const hits = (text.match(/Target\s*\d+\s*:[^✅]*✅/gi) || []).length;
-			const pnl = (text.match(/([\d.]+%\s*(?:Profit|Loss))/i) || [])[1] || "";
-			const stopped = /STOP\s*LOSS:.*🚫/i.test(text);
-			await notify(`📕 ${parsed.symbol} update — ${stopped ? "stopped out. " : hits ? hits + " target(s) hit. " : ""}${pnl}`.trim());
+			await notify(`📕 ${parsed.symbol} update — ${stopped ? "stopped out. " : hits ? hits + " target(s) hit. " : ""}${pm ? pm[0] : ""}`.trim());
 		}
 		return;
 	}

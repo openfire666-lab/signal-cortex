@@ -13,6 +13,7 @@ const store = require("./watches");
 const alertStore = require("./alerts");
 const orderState = require("./state");
 const sigStore = require("./signals");
+const histStore = require("./history");
 
 const API = `https://api.telegram.org/bot${telegram.token}`;
 let watches = store.load();
@@ -283,6 +284,30 @@ async function showOrders(chatId) {
 	} catch (e) { return reply(chatId, `⚠ ${e.message}`); }
 }
 
+// ── /stats — channel scorecard from the signal history ────────────────────────
+function statsCard(chatId) {
+	const h = histStore.load();
+	const closed = h.filter((x) => x.status === "won" || x.status === "lost");
+	const open = h.filter((x) => x.status === "open").length;
+	if (!closed.length) {
+		return reply(chatId, `📊 Scorecard — ${h.length} signals tracked, ${open} open, none closed yet. Stats build as signals resolve.`);
+	}
+	const won = closed.filter((x) => x.status === "won");
+	const lost = closed.filter((x) => x.status === "lost");
+	const wr = (won.length / closed.length * 100).toFixed(0);
+	const avgT = won.length ? (won.reduce((s, x) => s + (x.targetsHit || 0), 0) / won.length).toFixed(1) : "0";
+	const byCoin = {};
+	for (const x of closed) { const c = (byCoin[x.symbol] = byCoin[x.symbol] || { w: 0, l: 0 }); if (x.status === "won") c.w++; else c.l++; }
+	const top = Object.entries(byCoin).sort((a, b) => (b[1].w - b[1].l) - (a[1].w - a[1].l)).slice(0, 4).map(([s, c]) => `${s} ${c.w}/${c.w + c.l}`).join(" · ");
+	const recent = closed.slice(0, 6).map((x) => `${x.status === "won" ? "✅" : "🚫"}${x.symbol.replace("USDT", "")}${x.targetsHit ? "·T" + x.targetsHit : ""}`).join("  ");
+	return reply(chatId,
+		`📊 Channel scorecard — ${closed.length} closed, ${open} open\n` +
+		`Win rate: ${wr}%  (${won.length}W / ${lost.length}L)\n` +
+		`Avg targets hit (wins): ${avgT}\n` +
+		`Top coins: ${top || "—"}\n` +
+		`Recent: ${recent}`);
+}
+
 // ── message handler ──────────────────────────────────────────────────────────
 async function handle(msg) {
 	const chatId = msg.chat && msg.chat.id;
@@ -312,7 +337,9 @@ async function handle(msg) {
 			"/alert — menu of your price alerts (➕ add / ❌ remove). Or: /alert XLMUSDT 0.205 long\n" +
 			"/watches · /unwatch — watches   ·   /unalert — clear alerts\n" +
 			"/pos — your open positions (live PnL, liq distance)\n" +
-			"/orders — your resting orders (distance to price)\n\n" +
+			"/orders — your resting orders (✖ tap to cancel)\n" +
+			"/stats — channel scorecard (win-rate, targets, top coins)\n\n" +
+			"Auto: liq-proximity + order approach/fill pings.\n" +
 			"I also auto-ping you when an order nears its price or fills.");
 	}
 	if (/^\/watches\b/.test(text)) return listWatches(chatId);
@@ -326,6 +353,7 @@ async function handle(msg) {
 	}
 	if (/^\/pos\b/.test(text)) return showPositions(chatId);
 	if (/^\/orders\b/.test(text)) return showOrders(chatId);
+	if (/^\/stats\b/.test(text)) return statsCard(chatId);
 
 	const parsed = engine.parseSignal(text);
 	if (!parsed.symbol) return; // not a signal — stay quiet
@@ -437,7 +465,33 @@ async function checkOrders() {
 		near.delete(id);
 	}
 
-	orderState.save({ orders: cur, near: [...near].filter((id) => cur[id]) });
+	orderState.save({ ...st, orders: cur, near: [...near].filter((id) => cur[id]) });
+}
+
+// ── position risk guard — ping when a position nears liquidation ──────────────
+async function checkPositions() {
+	if (!priv.hasKeys() || !telegram.allowedChats.length) return;
+	let positions;
+	try { positions = ((await priv.positions()).list || []).filter((x) => +x.size > 0); }
+	catch { return; }
+	const st = orderState.load();
+	const prevNear = new Set(st.posNear || []);
+	const stillNear = [];
+	const cache = {};
+	for (const p of positions) {
+		const liq = +p.liqPrice;
+		const price = await priceOf(p.symbol, cache);
+		if (!liq || isNaN(price)) continue;
+		const dist = Math.abs(price - liq) / price * 100;
+		const key = `${p.symbol}:${p.side}`;
+		if (dist <= monitor.liqNearPct) {
+			stillNear.push(key);
+			if (!prevNear.has(key)) {
+				await notify(`⚠ ${p.symbol} ${p.side === "Buy" ? "LONG" : "SHORT"} is ${dist.toFixed(1)}% from LIQUIDATION — price ${price}, liq ${p.liqPrice}, uPnL ${p.unrealisedPnl}. Reduce or add margin.`);
+			}
+		}
+	}
+	orderState.save({ ...st, posNear: stillNear });
 }
 
 async function main() {
@@ -451,6 +505,7 @@ async function main() {
 		checkWatches().catch((e) => console.error("checkWatches:", e.message));
 		checkAlerts().catch((e) => console.error("checkAlerts:", e.message));
 		checkOrders().catch((e) => console.error("checkOrders:", e.message));
+		checkPositions().catch((e) => console.error("checkPositions:", e.message));
 	};
 	tick();                         // prime state + immediate near-alerts
 	setInterval(tick, 90000);
