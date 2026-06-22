@@ -14,6 +14,7 @@ const alertStore = require("./alerts");
 const orderState = require("./state");
 const sigStore = require("./signals");
 const histStore = require("./history");
+const equityStore = require("./equity");
 
 const API = `https://api.telegram.org/bot${telegram.token}`;
 
@@ -26,6 +27,7 @@ const BOT_COMMANDS = [
 	{ command: "pos", description: "Your open positions" },
 	{ command: "orders", description: "Your resting orders (tap to cancel)" },
 	{ command: "stats", description: "Channel scorecard (win-rate)" },
+	{ command: "pnl", description: "Your equity + realized P&L" },
 	{ command: "digest", description: "Morning summary now" },
 	{ command: "help", description: "Show all commands" },
 ];
@@ -370,6 +372,7 @@ async function handle(msg) {
 	if (/^\/orders\b/.test(text)) return showOrders(chatId);
 	if (/^\/stats\b/.test(text)) return statsCard(chatId);
 	if (/^\/digest\b/.test(text)) return sendDigest();
+	if (/^\/pnl\b/.test(text)) return pnlCard(chatId);
 
 	const parsed = engine.parseSignal(text);
 	if (!parsed.symbol) return; // not a signal — stay quiet
@@ -523,11 +526,19 @@ async function sendDigest() {
 		if (os.length) ordTxt = os.map((o) => `${o.symbol} ${o.side}@${o.price}`).join(", ");
 	} catch { /* ignore */ }
 	const sigs = sigStore.load().slice(0, 5).map((s) => `${s.symbol.replace("USDT", "")} ${String(s.direction).toUpperCase()}`).join(", ") || "none";
+	let eqTxt = "";
+	try {
+		const w = await priv.walletBalance();
+		const a = (w.list && w.list[0]) || {};
+		const cur = +a.totalEquity;
+		const wk = equityAt(equityStore.load(), 7);
+		if (!isNaN(cur)) eqTxt = `Equity: ${cur.toFixed(2)}${wk != null ? ` (7d ${cur - wk >= 0 ? "+" : ""}${(cur - wk).toFixed(2)})` : ""}\n\n`;
+	} catch { /* ignore */ }
 	const h = histStore.load();
 	const closed = h.filter((x) => x.status !== "open");
 	const won = closed.filter((x) => x.status === "won").length;
 	const wr = closed.length ? (won / closed.length * 100).toFixed(0) : "—";
-	await notify(`☀️ Daily digest\n\nPositions:\n${posTxt}\n\nOrders: ${ordTxt}\nAlerts armed: ${alerts.length}\nOpen VIP signals: ${sigs}\nChannel win-rate: ${wr}% (${closed.length} closed)`);
+	await notify(`☀️ Daily digest\n\n${eqTxt}Positions:\n${posTxt}\n\nOrders: ${ordTxt}\nAlerts armed: ${alerts.length}\nOpen VIP signals: ${sigs}\nChannel win-rate: ${wr}% (${closed.length} closed)`);
 }
 
 async function maybeDigest() {
@@ -541,6 +552,48 @@ async function maybeDigest() {
 	await sendDigest();
 }
 
+// ── your P&L — daily equity snapshot + /pnl ──────────────────────────────────
+async function snapshotEquity() {
+	if (!priv.hasKeys()) return;
+	const st = orderState.load();
+	const day = new Date().toISOString().slice(0, 10);
+	if (st.equityDay === day) return;
+	try {
+		const w = await priv.walletBalance();
+		const acct = (w.list && w.list[0]) || {};
+		const eq = +acct.totalEquity;
+		if (isNaN(eq)) return;
+		const hist = equityStore.load();
+		hist.push({ date: day, equity: eq, available: +acct.totalAvailableBalance });
+		equityStore.save(hist);
+		orderState.save({ ...st, equityDay: day });
+	} catch { /* ignore */ }
+}
+
+function equityAt(hist, days) {
+	const d = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+	const rec = [...hist].reverse().find((h) => h.date <= d);
+	return rec ? rec.equity : null;
+}
+
+async function pnlCard(chatId) {
+	if (!priv.hasKeys()) return reply(chatId, "No Bybit key configured.");
+	const hist = equityStore.load();
+	let cur = hist.length ? hist[hist.length - 1].equity : null;
+	try { const w = await priv.walletBalance(); const a = (w.list && w.list[0]) || {}; if (!isNaN(+a.totalEquity)) cur = +a.totalEquity; } catch { /* ignore */ }
+	const delta = (base) => (base != null && cur != null) ? `${cur - base >= 0 ? "+" : ""}${(cur - base).toFixed(2)} (${((cur - base) / base * 100).toFixed(1)}%)` : "—";
+	let realized = "";
+	try {
+		const cp = (await priv.closedPnl()).list || [];
+		const sum = cp.reduce((s, x) => s + (+x.closedPnl || 0), 0);
+		realized = `\nRealized (last ${cp.length} closed): ${sum >= 0 ? "+" : ""}${sum.toFixed(2)}`;
+	} catch { /* ignore */ }
+	return reply(chatId,
+		`💰 Your account\nEquity: ${cur != null ? cur.toFixed(2) : "—"}\n` +
+		`1d: ${delta(equityAt(hist, 1))}\n7d: ${delta(equityAt(hist, 7))}\n30d: ${delta(equityAt(hist, 30))}${realized}\n` +
+		`(deltas fill in as daily snapshots accrue)`);
+}
+
 async function main() {
 	if (!telegram.token) {
 		console.error("TELEGRAM_BOT_TOKEN not set — bot disabled.");
@@ -550,6 +603,7 @@ async function main() {
 	await call("setMyCommands", { commands: BOT_COMMANDS }).catch((e) => console.error("setMyCommands:", e.message));
 	console.log(`telegram bot polling as @${me.result ? me.result.username : "?"} (${watches.length} watch(es) loaded)`);
 	const tick = () => {
+		snapshotEquity().catch((e) => console.error("equity:", e.message));
 		maybeDigest().catch((e) => console.error("digest:", e.message));
 		checkWatches().catch((e) => console.error("checkWatches:", e.message));
 		checkAlerts().catch((e) => console.error("checkAlerts:", e.message));

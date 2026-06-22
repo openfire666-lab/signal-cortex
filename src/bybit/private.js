@@ -73,6 +73,9 @@ module.exports = {
 		}),
 	walletBalance: (accountType = "UNIFIED") =>
 		signedGet("/v5/account/wallet-balance", { accountType }),
+	// Recent closed trades with realized PnL.
+	closedPnl: (limit = 30) =>
+		signedGet("/v5/position/closed-pnl", { category: bybit.category, limit }),
 	// Cancel one resting order — needs the Trade permission.
 	cancelOrder: (symbol, orderId) =>
 		signedPost("/v5/order/cancel", { category: bybit.category, symbol, orderId }),

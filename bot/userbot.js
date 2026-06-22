@@ -85,7 +85,10 @@ async function ingest(text, doNotify) {
 		recordOpen(sig);
 		if (doNotify) {
 			const a = await engine.analyzeSignal({ ...parsed, includeAccount: telegram.allowedChats.length > 0 });
-			await notify(`📡 ${userbot.channel || "VIP"} — ${parsed.symbol} ${String(parsed.direction).toUpperCase()}\n\n` + plain(brief.analysisBrief(a)));
+			const score = a.score || 0;
+			if (score < userbot.minScore) { console.log(`skip push: ${parsed.symbol} score ${score} < ${userbot.minScore}`); return; }
+			const emoji = score >= 70 ? "🟢" : score >= 50 ? "🟡" : "🔴";
+			await notify(`📡 ${emoji} ${userbot.channel || "VIP"} — ${parsed.symbol} ${String(parsed.direction).toUpperCase()} (score ${score})\n\n` + plain(brief.analysisBrief(a)));
 		}
 		return;
 	}

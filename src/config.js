@@ -50,5 +50,7 @@ module.exports = {
 		apiHash: process.env.TELEGRAM_API_HASH || "",
 		session: process.env.TELEGRAM_SESSION || "",   // produced by userbot-login
 		channel: process.env.BK_CHANNEL || "",         // @username or numeric id
+		// Only push channel signals scoring >= this (0 = push all, just tagged).
+		minScore: parseInt(process.env.MIN_SCORE || "0", 10),
 	},
 };
