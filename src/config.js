@@ -38,6 +38,12 @@ module.exports = {
 		orderNearPct: parseFloat(process.env.ORDER_NEAR_PCT || "1"),
 		// Alert when an open position is within this % of its liquidation price.
 		liqNearPct: parseFloat(process.env.LIQ_NEAR_PCT || "8"),
+		// Daily digest hour (UTC, 0-23). Set DIGEST_HOUR=off to disable.
+		digestHour: process.env.DIGEST_HOUR === "off" ? null : parseInt(process.env.DIGEST_HOUR || "7", 10),
+	},
+	trade: {
+		// Suggested position size targets this % of equity at risk (entry→stop).
+		riskPct: parseFloat(process.env.RISK_PCT || "2"),
 	},
 	userbot: {
 		apiId: parseInt(process.env.TELEGRAM_API_ID || "0", 10),

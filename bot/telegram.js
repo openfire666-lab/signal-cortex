@@ -338,8 +338,9 @@ async function handle(msg) {
 			"/watches · /unwatch — watches   ·   /unalert — clear alerts\n" +
 			"/pos — your open positions (live PnL, liq distance)\n" +
 			"/orders — your resting orders (✖ tap to cancel)\n" +
-			"/stats — channel scorecard (win-rate, targets, top coins)\n\n" +
-			"Auto: liq-proximity + order approach/fill pings.\n" +
+			"/stats — channel scorecard (win-rate, targets, top coins)\n" +
+			"/digest — morning summary on demand\n\n" +
+			"Auto: liq-proximity + order approach/fill pings + daily digest.\n" +
 			"I also auto-ping you when an order nears its price or fills.");
 	}
 	if (/^\/watches\b/.test(text)) return listWatches(chatId);
@@ -354,6 +355,7 @@ async function handle(msg) {
 	if (/^\/pos\b/.test(text)) return showPositions(chatId);
 	if (/^\/orders\b/.test(text)) return showOrders(chatId);
 	if (/^\/stats\b/.test(text)) return statsCard(chatId);
+	if (/^\/digest\b/.test(text)) return sendDigest();
 
 	const parsed = engine.parseSignal(text);
 	if (!parsed.symbol) return; // not a signal — stay quiet
@@ -494,6 +496,37 @@ async function checkPositions() {
 	orderState.save({ ...st, posNear: stillNear });
 }
 
+// ── daily digest — one morning summary at DIGEST_HOUR (UTC) ───────────────────
+async function sendDigest() {
+	let posTxt = "none";
+	try {
+		const ps = ((await priv.positions()).list || []).filter((x) => +x.size > 0);
+		if (ps.length) posTxt = ps.map((p) => `• ${p.symbol} ${p.side === "Buy" ? "L" : "S"} ${p.size}@${p.avgPrice} · uPnL ${p.unrealisedPnl}`).join("\n");
+	} catch { /* ignore */ }
+	let ordTxt = "none";
+	try {
+		const os = (await priv.openOrders()).list || [];
+		if (os.length) ordTxt = os.map((o) => `${o.symbol} ${o.side}@${o.price}`).join(", ");
+	} catch { /* ignore */ }
+	const sigs = sigStore.load().slice(0, 5).map((s) => `${s.symbol.replace("USDT", "")} ${String(s.direction).toUpperCase()}`).join(", ") || "none";
+	const h = histStore.load();
+	const closed = h.filter((x) => x.status !== "open");
+	const won = closed.filter((x) => x.status === "won").length;
+	const wr = closed.length ? (won / closed.length * 100).toFixed(0) : "—";
+	await notify(`☀️ Daily digest\n\nPositions:\n${posTxt}\n\nOrders: ${ordTxt}\nAlerts armed: ${alerts.length}\nOpen VIP signals: ${sigs}\nChannel win-rate: ${wr}% (${closed.length} closed)`);
+}
+
+async function maybeDigest() {
+	if (monitor.digestHour == null || isNaN(monitor.digestHour) || !telegram.allowedChats.length) return;
+	const now = new Date();
+	if (now.getUTCHours() !== monitor.digestHour) return;
+	const day = now.toISOString().slice(0, 10);
+	const st = orderState.load();
+	if (st.lastDigest === day) return;
+	orderState.save({ ...st, lastDigest: day });
+	await sendDigest();
+}
+
 async function main() {
 	if (!telegram.token) {
 		console.error("TELEGRAM_BOT_TOKEN not set — bot disabled.");
@@ -502,6 +535,7 @@ async function main() {
 	const me = await call("getMe");
 	console.log(`telegram bot polling as @${me.result ? me.result.username : "?"} (${watches.length} watch(es) loaded)`);
 	const tick = () => {
+		maybeDigest().catch((e) => console.error("digest:", e.message));
 		checkWatches().catch((e) => console.error("checkWatches:", e.message));
 		checkAlerts().catch((e) => console.error("checkAlerts:", e.message));
 		checkOrders().catch((e) => console.error("checkOrders:", e.message));

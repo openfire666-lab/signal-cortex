@@ -2,6 +2,7 @@
 
 // Render verdict objects as a dense markdown brief — optimised for a model to
 // read and reason over, while still being human-skimmable.
+const { trade } = require("../config");
 
 function num(n, d = 4) {
 	if (n == null || isNaN(n)) return "—";
@@ -70,6 +71,11 @@ function analysisBrief(a) {
 	L.push(``);
 	L.push(`**Risk** — SL ${num(a.stopLoss)} = ${num(a.risk)} from entry${a.slAtr != null ? ` (${a.slAtr}× 1h ATR)` : ""}. Liq est ~${num(a.liq)}${a.leverage ? ` @ ${a.leverage.max}x` : ""}.`);
 	L.push(`**R:R** — ${a.rr.map((r) => `${num(r.tp)} = ${r.rr != null ? r.rr + "R" : "—"}`).join(" · ") || "—"}`);
+	if (a.account && a.account.wallet && a.account.wallet.equity && a.risk) {
+		const eq = a.account.wallet.equity;
+		const units = (eq * trade.riskPct / 100) / a.risk;
+		L.push(`**Size for ${trade.riskPct}% risk** (eq ${num(eq, 2)}) — ~${num(units, 2)} units (~$${num(units * a.entryMid, 2)} notional)`);
+	}
 	L.push(``);
 	L.push(...accountBlock(a.account));
 	if (a.flags.length) {
