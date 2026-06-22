@@ -12,6 +12,7 @@ const priv = require("../src/bybit/private");
 const store = require("./watches");
 const alertStore = require("./alerts");
 const orderState = require("./state");
+const sigStore = require("./signals");
 
 const API = `https://api.telegram.org/bot${telegram.token}`;
 let watches = store.load();
@@ -93,6 +94,13 @@ function clearWatches(chatId) {
 }
 
 // ── /alert — price triggers (virtual orders; no funds frozen) ─────────────────
+function fmtEntry(e) {
+	const a = (e || []).filter((x) => x != null);
+	if (!a.length) return "";
+	const lo = Math.min(...a), hi = Math.max(...a);
+	return lo === hi ? String(lo) : `${lo}-${hi}`;
+}
+
 function alertRows(chatId) {
 	const mine = alerts.filter((a) => a.chatId === chatId);
 	const rows = mine.map((a) => [{ text: `❌ ${a.symbol}${a.side ? " " + a.side.toUpperCase() : ""} @ ${a.target}`, callback_data: `al_rm_${a.id}` }]);
@@ -131,26 +139,82 @@ async function createAlert(chatId, argstr) {
 
 async function onCallback(cb) {
 	const chatId = cb.message && cb.message.chat && cb.message.chat.id;
+	const mid = cb.message && cb.message.message_id;
 	const data = cb.data || "";
-	if (!chatId || !allowed(chatId)) return call("answerCallbackQuery", { callback_query_id: cb.id });
+	const ack = (text) => call("answerCallbackQuery", { callback_query_id: cb.id, ...(text ? { text } : {}) });
+	if (!chatId || !allowed(chatId)) return ack();
+
+	// ➕ New alert → pick a recent OPEN signal (tap-only), or type manually.
 	if (data === "al_add") {
-		await call("answerCallbackQuery", { callback_query_id: cb.id });
+		await ack();
+		const sigs = sigStore.load();
+		const rows = sigs.slice(0, 8).map((s) => [{
+			text: `${s.symbol} ${String(s.direction).toUpperCase()}${s.entry && s.entry.length ? " " + fmtEntry(s.entry) : ""}`,
+			callback_data: `al_sig_${s.id || s.symbol}`,
+		}]);
+		rows.push([{ text: "✏️ Type manually", callback_data: "al_man" }]);
+		return call("editMessageText", {
+			chat_id: chatId, message_id: mid,
+			text: sigs.length ? "Pick a recent signal, then a price — or type manually:" : "No recent signals cached yet. Type manually:",
+			reply_markup: { inline_keyboard: rows },
+		});
+	}
+
+	if (data === "al_man") {
+		await ack();
 		return reply(chatId, "Send: SYMBOL PRICE [long|short]\ne.g.  XLMUSDT 0.205 long", { force_reply: true });
 	}
+
+	// Picked a signal → choose a fill price (its entry prices, or custom).
+	if (data.startsWith("al_sig_")) {
+		await ack();
+		const key = data.slice(7);
+		const s = sigStore.load().find((x) => (x.id || x.symbol) === key);
+		if (!s) return reply(chatId, "That signal expired — type /alert SYMBOL PRICE.");
+		const prices = [...new Set((s.entry || []).filter((p) => p != null))];
+		const rows = prices.map((p) => [{ text: `@ ${p}`, callback_data: `al_set_${key}_${p}` }]);
+		rows.push([{ text: "✏️ Custom price", callback_data: `al_cust_${key}` }]);
+		return call("editMessageText", {
+			chat_id: chatId, message_id: mid,
+			text: `${s.symbol} ${String(s.direction).toUpperCase()} — pick your fill price:`,
+			reply_markup: { inline_keyboard: rows },
+		});
+	}
+
+	// Picked a price → set the alert (symbol + direction from the signal).
+	if (data.startsWith("al_set_")) {
+		const rest = data.slice(7);
+		const u = rest.lastIndexOf("_");
+		const key = rest.slice(0, u), price = rest.slice(u + 1);
+		const s = sigStore.load().find((x) => (x.id || x.symbol) === key);
+		await ack("Setting…");
+		if (!s) return reply(chatId, "That signal expired — type /alert SYMBOL PRICE.");
+		return createAlert(chatId, `${s.symbol} ${price} ${s.direction}`);
+	}
+
+	if (data.startsWith("al_cust_")) {
+		await ack();
+		const key = data.slice(8);
+		const s = sigStore.load().find((x) => (x.id || x.symbol) === key);
+		if (!s) return reply(chatId, "That signal expired — type /alert SYMBOL PRICE.");
+		return reply(chatId, `Price for ${s.symbol} ${String(s.direction).toUpperCase()}:`, { force_reply: true });
+	}
+
 	if (data.startsWith("al_rm_")) {
 		const id = data.slice(6);
 		const before = alerts.length;
 		alerts = alerts.filter((a) => !(a.chatId === chatId && a.id === id));
 		if (alerts.length !== before) alertStore.save(alerts);
-		await call("answerCallbackQuery", { callback_query_id: cb.id, text: "Removed" });
+		await ack("Removed");
 		const { mine, rows } = alertRows(chatId);
 		return call("editMessageText", {
-			chat_id: chatId, message_id: cb.message.message_id,
+			chat_id: chatId, message_id: mid,
 			text: mine.length ? "📋 Your price alerts. Tap ❌ to remove:" : "No price alerts. Tap ➕ to add one.",
 			reply_markup: { inline_keyboard: rows },
 		});
 	}
-	return call("answerCallbackQuery", { callback_query_id: cb.id });
+
+	return ack();
 }
 
 function clearAlerts(chatId) {
@@ -191,7 +255,9 @@ async function showOrders(chatId) {
 			const dist = (price && op) ? ` · now ${price} (${(Math.abs(price - op) / op * 100).toFixed(2)}% away)` : "";
 			return `• ${o.symbol} ${o.side} ${o.qty} @ ${o.price} [${o.orderStatus}]${dist}`;
 		}));
-		return reply(chatId, "🧾 Open orders:\n" + lines.join("\n"));
+		const syms = [...new Set(os.map((o) => o.symbol))];
+		const kb = syms.map((s) => [{ text: `✖ Cancel ${s} on Bybit`, url: `https://www.bybit.com/trade/usdt/${s}` }]);
+		return reply(chatId, "🧾 Open orders:\n" + lines.join("\n") + "\n\nTap to cancel on Bybit (frees the locked margin):", { inline_keyboard: kb });
 	} catch (e) { return reply(chatId, `⚠ ${e.message}`); }
 }
 
@@ -207,9 +273,12 @@ async function handle(msg) {
 	}
 	if (!allowed(chatId)) return;
 
-	// Reply to the "➕ New alert" prompt → create the alert.
-	if (msg.reply_to_message && /^Send: SYMBOL PRICE/.test(msg.reply_to_message.text || "")) {
-		return createAlert(chatId, text);
+	// Replies to the alert force-reply prompts → create the alert.
+	if (msg.reply_to_message) {
+		const rt = msg.reply_to_message.text || "";
+		if (/^Send: SYMBOL PRICE/.test(rt)) return createAlert(chatId, text);
+		const pm = rt.match(/^Price for ([A-Z0-9]+) (LONG|SHORT)/i);
+		if (pm) return createAlert(chatId, `${pm[1]} ${text} ${pm[2]}`);
 	}
 
 	if (/^\/(start|help)/.test(text)) {
