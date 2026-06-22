@@ -4,7 +4,7 @@
 // score + your live position). /watch a signal to get pinged at its entry zone.
 // Order monitor: pings you when an open Bybit order nears its price or fills.
 // Zero-dependency long-polling; reuses the HTTP engine.
-const { telegram, monitor } = require("../src/config");
+const { telegram, monitor, trade } = require("../src/config");
 const engine = require("../src/analyze/engine");
 const brief = require("../src/format/brief");
 const pub = require("../src/bybit/public");
@@ -27,6 +27,7 @@ const BOT_COMMANDS = [
 	{ command: "pos", description: "Your open positions" },
 	{ command: "orders", description: "Your resting orders (tap to cancel)" },
 	{ command: "stats", description: "Channel scorecard (win-rate)" },
+	{ command: "backtest", description: "What-if: every signal at your risk %" },
 	{ command: "pnl", description: "Your equity + realized P&L" },
 	{ command: "digest", description: "Morning summary now" },
 	{ command: "help", description: "Show all commands" },
@@ -300,6 +301,36 @@ async function showOrders(chatId) {
 	} catch (e) { return reply(chatId, `⚠ ${e.message}`); }
 }
 
+// ── /backtest — what-if: every closed signal at fixed risk ───────────────────
+function backtest(history) {
+	let r = 0, wins = 0, losses = 0, used = 0;
+	for (const h of history) {
+		if (h.status === "open") continue;
+		if (h.status === "lost") { r -= 1; losses++; used++; continue; }
+		// won → R of the highest target actually reached
+		if (h.entry && h.entry.length && h.targets && h.targets.length && h.sl != null && h.targetsHit) {
+			const mid = (Math.min(...h.entry) + Math.max(...h.entry)) / 2;
+			const risk = Math.abs(mid - h.sl);
+			const tgt = h.targets[Math.min(h.targetsHit, h.targets.length) - 1];
+			if (risk > 0 && tgt != null) { r += Math.abs(tgt - mid) / risk; wins++; used++; continue; }
+		}
+		r += 1; wins++; used++; // won but missing data → conservative +1R
+	}
+	return { r, wins, losses, used };
+}
+
+function backtestCard(chatId) {
+	const bt = backtest(histStore.load());
+	if (!bt.used) return reply(chatId, "Not enough closed signals to backtest yet.");
+	const acctPct = bt.r * trade.riskPct;
+	return reply(chatId,
+		`🧪 Backtest — every closed VIP signal\n` +
+		`Closed: ${bt.used}  (${bt.wins}W / ${bt.losses}L)\n` +
+		`Net: ${bt.r >= 0 ? "+" : ""}${bt.r.toFixed(1)}R\n` +
+		`At ${trade.riskPct}% risk/trade → ${acctPct >= 0 ? "+" : ""}${acctPct.toFixed(1)}% account\n` +
+		`(assumes exit at the highest target reached, −1R on stops; not compounded)`);
+}
+
 // ── /stats — channel scorecard from the signal history ────────────────────────
 function statsCard(chatId) {
 	const h = histStore.load();
@@ -371,6 +402,7 @@ async function handle(msg) {
 	if (/^\/pos\b/.test(text)) return showPositions(chatId);
 	if (/^\/orders\b/.test(text)) return showOrders(chatId);
 	if (/^\/stats\b/.test(text)) return statsCard(chatId);
+	if (/^\/backtest\b/.test(text)) return backtestCard(chatId);
 	if (/^\/digest\b/.test(text)) return sendDigest();
 	if (/^\/pnl\b/.test(text)) return pnlCard(chatId);
 
