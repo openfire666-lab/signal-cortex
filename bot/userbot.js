@@ -16,6 +16,7 @@ const histStore = require("./history");
 const BOT_API = `https://api.telegram.org/bot${telegram.token}`;
 let openSignals = sigStore.load();
 let history = histStore.load();
+let lastSeenId = 0;
 
 const plain = (md) => md.replace(/\*\*/g, "").replace(/^#+ /gm, "");
 
@@ -107,6 +108,14 @@ async function ingest(text, doNotify) {
 	}
 }
 
+// Dedup wrapper — process each message once, tracking the highest id seen.
+async function handleMsg(msg, doNotify) {
+	const id = (msg && msg.id) || 0;
+	if (id && id <= lastSeenId) return;
+	if (id) lastSeenId = Math.max(lastSeenId, id);
+	await ingest((msg && (msg.message || msg.text)) || "", doNotify);
+}
+
 (async () => {
 	if (!userbot.apiId || !userbot.session) {
 		console.error("userbot not configured — need TELEGRAM_API_ID/HASH/SESSION (run userbot-login.js).");
@@ -122,17 +131,28 @@ async function ingest(text, doNotify) {
 	try { await client.getDialogs({ limit: 200 }); } catch (e) { console.error("getDialogs:", e.message); }
 	const ch = /^-?\d+$/.test(userbot.channel) ? Number(userbot.channel) : userbot.channel;
 
-	// Backfill recent open signals (no notify) so the wizard has options at once.
+	// Backfill recent signals (no push) so the wizard/scorecard have data at once.
 	try {
 		const ms = await client.getMessages(ch, { limit: 40 });
-		for (const m of ms.slice().reverse()) await ingest((m && m.message) || "", false).catch(() => {});
-		console.log(`backfill: ${openSignals.length} open signals`);
+		for (const m of ms.slice().reverse()) await handleMsg(m, false).catch(() => {});
+		console.log(`backfill: ${openSignals.length} open signals, lastSeenId ${lastSeenId}`);
 	} catch (e) { console.error("backfill:", e.message); }
 
+	// Live stream (fast path).
 	const filter = userbot.channel ? { chats: [ch] } : {};
 	client.addEventHandler(
-		(e) => ingest((e.message && (e.message.message || e.message.text)) || "", true).catch((err) => console.error("ingest:", err.message)),
+		(e) => handleMsg(e.message, true).catch((err) => console.error("live:", err.message)),
 		new NewMessage(filter),
 	);
-	console.log(`userbot connected as ${me.username || me.firstName}; reading ${userbot.channel || "ALL chats"} → bot DM`);
+
+	// Safety-net poller — GramJS update streams can silently stop after a
+	// reconnect/TIMEOUT; every 3 min re-fetch and push anything the stream missed.
+	setInterval(async () => {
+		try {
+			const ms = await client.getMessages(ch, { limit: 30 });
+			for (const m of ms.slice().reverse()) await handleMsg(m, true).catch(() => {});
+		} catch (e) { console.error("poll:", e.message); }
+	}, 180000);
+
+	console.log(`userbot connected as ${me.username || me.firstName}; reading ${userbot.channel || "ALL chats"} → bot DM (poll every 3m)`);
 })().catch((e) => { console.error(e); process.exit(1); });
